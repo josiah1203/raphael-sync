@@ -1,0 +1,12 @@
+openapi: 3.1.0
+info:
+  title: raphael-sync
+  version: 0.1.0
+  description: Desktop file monitoring, offline sync, conflict resolution
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
