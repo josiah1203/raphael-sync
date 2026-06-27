@@ -8,6 +8,7 @@ import queue
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -18,9 +19,10 @@ from raphael_artifacts.calliope_schema.validator import validate_design_snapshot
 from raphael_audit.core.observability.hardening import MultiTenancyGuard, ObservabilityEngine
 from raphael_sync.calliope_agent.config import AgentConfig
 from raphael_sync.calliope_agent.diff_engine import diff_snapshots
+from raphael_sync.platform_sink import KafkaPlatformSink, LocalWALSink, PlatformSink
 from raphael_sync.calliope_agent.session_state import SessionState
 
-from calliope_sdk import build_envelope, PlatformProducer
+from calliope_sdk import build_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -114,17 +116,6 @@ class _DiffWorker:
         return result
 
 
-class PlatformSink:
-    """Interface for platform event delivery."""
-    def produce(self, event: dict[str, Any]) -> None:
-        raise NotImplementedError
-
-class KafkaPlatformSink(PlatformSink):
-    def __init__(self, config: dict[str, Any]):
-        self._producer = PlatformProducer(config)
-    def produce(self, event: dict[str, Any]) -> None:
-        self._producer.produce(event)
-
 class AgentServer:
     """Threaded localhost HTTP server."""
 
@@ -136,17 +127,23 @@ class AgentServer:
     ) -> None:
         self.config = config
         self.store = store or EventStore()
-        self.platform_sink = None
+        self.state = state or SessionState()
         if config.mode == "platform":
-             self.platform_sink = KafkaPlatformSink(config.platform)
-        
+            self.platform_sink: PlatformSink = KafkaPlatformSink(config.platform)
+        else:
+            wal_path = config.platform.get("wal_path")
+            if wal_path:
+                resolved = Path(wal_path)
+            else:
+                resolved = self.state.path.parent / "wal" / "events.jsonl"
+            self.platform_sink = LocalWALSink(resolved)
+
         # Optional Encryption: encrypted_at_rest flag in config
         if config.encrypted_at_rest:
             logger.info("Encrypted at rest is enabled for event store")
             # In a real implementation, we would wrap self.store or use SQLCipher
             # For v0.2, we'll just log and assume the store is protected.
-        
-        self.state = state or SessionState()
+
         self.state.agent_server = self
         self.guard = MultiTenancyGuard()
         self.obs = ObservabilityEngine()
